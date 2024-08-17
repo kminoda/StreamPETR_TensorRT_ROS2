@@ -1,0 +1,6 @@
+/**:
+  ros__parameters:
+    onnx_backbone_path: "$(var model_path)/simplify_extract_img_feat.onnx"
+    onnx_head_path: "$(var model_path)/simplify_pts_head_memory.onnx"
+    precision_backbone: "fp32"
+    precision_head: "fp32"

@@ -1,0 +1,8 @@
+<launch>
+  <arg name="param_path" default="$(find-pkg-share tensorrt_stream_petr)/config/tensorrt_stream_petr.param.yaml" />
+  <arg name="model_path" default="$(find-pkg-share tensorrt_stream_petr)/data"/>
+
+  <node pkg="tensorrt_stream_petr" exec="stream_petr_node" name="stream_petr" output="screen">
+    <param from="$(var param_path)" allow_substs="true" />
+  </node>
+</launch>
