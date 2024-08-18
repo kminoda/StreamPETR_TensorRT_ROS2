@@ -1,5 +1,10 @@
 # TensorRT StreamPETR
 
+- [ ] Inference from bin files
+- [ ] Inference from bin files and apply appropriate post processing
+- [ ] Inference from bin files with position embedding computed online
+- [ ] Inference from ROS topics for NuScenes dataset
+
 ## Setup
 
 ### Step 1: Prepare ONNX
