@@ -20,3 +20,8 @@ colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 Note that currently this repository heavily depends on [Autoware Universe](https://github.com/autowarefoundation/autoware.universe). Thus, you need to build and source the `setup.bash` beforehand. For this, please follow the instruction from Autoware.
 
+## How to run
+
+```bash
+ros2 launch tensorrt_stream_petr tensorrt_stream_petr.launch.xml
+```
