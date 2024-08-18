@@ -27,6 +27,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <string>
 
+#include <autoware_perception_msgs/msg/detected_objects.hpp>
 #include <sensor_msgs/msg/image.hpp>
 
 // From NVIDIA/DL4AGX
@@ -44,6 +45,8 @@
 #include <NvInferRuntime.h>
 #include "memory.cuh"
 // From NVIDIA/DL4AGX
+
+#include "non_maximum_suppression.hpp"
 
 namespace tensorrt_stream_petr
 {
@@ -73,6 +76,10 @@ inline unsigned int getElementSize(nvinfer1::DataType t) {
     case nvinfer1::DataType::kFLOAT: return 4;
     case nvinfer1::DataType::kHALF: return 2;
     case nvinfer1::DataType::kINT8: return 1;
+    case nvinfer1::DataType::kBOOL:
+    case nvinfer1::DataType::kUINT8:
+    case nvinfer1::DataType::kFP8:
+      throw std::logic_error("Unsupported DataType encountered: " + std::to_string(static_cast<int>(t)));
   }
   throw std::runtime_error("Invalid DataType.");
   return 0;
@@ -288,15 +295,22 @@ public:
 class StreamPetrNode : public rclcpp::Node
 {
   using Image = sensor_msgs::msg::Image;
+  using DetectedObjects = autoware_perception_msgs::msg::DetectedObjects;
+  using DetectedObject = autoware_perception_msgs::msg::DetectedObject;
 
 public:
   explicit StreamPetrNode(const rclcpp::NodeOptions & node_options);
 
 private:
-  void inference(const int f);
+  void inference(const int f, const std::string & data_dir);
   void on_image(const Image & msg);
 
   rclcpp::Subscription<Image>::SharedPtr sub_image_;
+  rclcpp::Publisher<DetectedObjects>::SharedPtr pub_objects_;
+
+  const double confidence_threshold_;
+
+  NonMaximumSuppression iou_bev_nms_;
 
   std::unique_ptr<SubNetwork> backbone_;
   std::unique_ptr<SubNetwork> pts_head_;

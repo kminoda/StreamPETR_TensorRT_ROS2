@@ -1,6 +1,16 @@
 /**:
   ros__parameters:
-    onnx_backbone_path: "$(var model_path)/simplify_extract_img_feat.onnx"
-    onnx_head_path: "$(var model_path)/simplify_pts_head_memory.onnx"
-    precision_backbone: "fp32"
-    precision_head: "fp32"
+    temporary_params:
+      bins_directory_path: /home/minoda/ghq/github.com/exiawsh/StreamPETR/work_dirs/intermediate/
+    model_params:
+      engine_backbone_path: "$(var model_path)/simplify_extract_img_feat.engine"
+      engine_head_path: "$(var model_path)/simplify_pts_head_memory.engine"
+      precision_backbone: "fp32"
+      precision_head: "fp32"
+    post_process_params:
+      confidence_threshold: 0.5
+      # circle_nms_dist_threshold: 0.5
+      iou_nms_target_class_names: ["CAR"]
+      iou_nms_search_distance_2d: 10.0
+      iou_nms_threshold: 0.1
+      # yaw_norm_thresholds: [0.3, 0.3, 0.3, 0.3, 0.0]

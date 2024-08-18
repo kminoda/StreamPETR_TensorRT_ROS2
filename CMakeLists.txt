@@ -20,6 +20,9 @@ include(CheckLanguage)
 check_language(CUDA)
 find_package(CUDA REQUIRED)
 
+set(CUDA_ARCHITECTURES 89)
+
+
 if(CMAKE_CUDA_COMPILER)
   enable_language(CUDA)
 else()
@@ -96,6 +99,13 @@ include_directories(
 
 ament_auto_add_library(stream_petr_node_component SHARED
   src/stream_petr_node.cpp
+  src/non_maximum_suppression.cpp
+  src/ros_utils.cpp
+  src/utils.cpp
+)
+
+cuda_add_library(stream_petr_node_cuda_lib SHARED
+  src/memory.cu
 )
 
 target_link_libraries(stream_petr_node_component
@@ -105,6 +115,7 @@ target_link_libraries(stream_petr_node_component
   ${CUDA_LIBRARIES}
   ${CUBLAS_LIBRARIES}
   ${CUDNN_LIBRARY}
+  stream_petr_node_cuda_lib
 )
 
 rclcpp_components_register_node(stream_petr_node_component
