@@ -1,8 +1,8 @@
 # TensorRT StreamPETR
 
-- [ ] Inference from bin files
-- [ ] Inference from bin files and apply appropriate post processing
+- [x] Inference from bin files
 - [ ] Inference from bin files with position embedding computed online
+- [ ] Inference from bin files with position embedding computed at the initial step
 - [ ] Inference from ROS topics for NuScenes dataset
 
 ## Setup

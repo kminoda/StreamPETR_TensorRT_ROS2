@@ -7,6 +7,7 @@
       engine_head_path: "$(var model_path)/simplify_pts_head_memory.engine"
       precision_backbone: "fp32"
       precision_head: "fp32"
+      point_cloud_range: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
     post_process_params:
       confidence_threshold: 0.5
       # circle_nms_dist_threshold: 0.5

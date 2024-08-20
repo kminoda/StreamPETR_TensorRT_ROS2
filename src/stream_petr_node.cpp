@@ -14,13 +14,125 @@
 
 #include "stream_petr_node.hpp"
 
+#include <cmath>
 #include <memory>
 #include <string>
 #include <vector>
 #include <thread>
+#include <algorithm>
 
 namespace tensorrt_stream_petr
 {
+
+std::pair<std::vector<size_t>, std::vector<float>> sort_with_indices_in_descending_order(const std::vector<float>& vec) {
+  std::vector<std::pair<float, size_t>> paired_vec(vec.size());
+  for (size_t i = 0; i < vec.size(); ++i) {
+    paired_vec[i] = std::make_pair(vec[i], i);
+  }
+
+  std::sort(paired_vec.begin(), paired_vec.end(), [](const auto& a, const auto& b) {
+    return a.first > b.first;
+  });
+
+  std::vector<size_t> sorted_indices(vec.size());
+  std::vector<float> sorted_values(vec.size());
+  for (size_t i = 0; i < paired_vec.size(); ++i) {
+    sorted_values[i] = paired_vec[i].first;
+    sorted_indices[i] = paired_vec[i].second;
+  }
+
+  return std::make_pair(sorted_indices, sorted_values);
+}
+
+float compute_rotation(float sine, float cosine) {
+  return std::atan2(sine, cosine);
+}
+
+float exp_value(float value) {
+  return std::exp(value);
+}
+
+std::vector<float> denormalize_bbox(const std::vector<float>& bbox) {
+  bool has_velocity = bbox.size() > 8;
+
+  float rot_sine = bbox[6];
+  float rot_cosine = bbox[7];
+  float rot = compute_rotation(rot_sine, rot_cosine);
+
+  float cx = bbox[0];
+  float cy = bbox[1];
+  float cz = bbox[2];
+
+  float w = exp_value(bbox[3]);
+  float l = exp_value(bbox[4]);
+  float h = exp_value(bbox[5]);
+
+  std::vector<float> denormalized_bboxes;
+
+  denormalized_bboxes.push_back(cx);
+  denormalized_bboxes.push_back(cy);
+  denormalized_bboxes.push_back(cz);
+  denormalized_bboxes.push_back(w);
+  denormalized_bboxes.push_back(l);
+  denormalized_bboxes.push_back(h);
+  denormalized_bboxes.push_back(rot);
+
+  if (has_velocity) {
+    float vx = bbox[8];
+    float vy = bbox[9];
+    denormalized_bboxes.push_back(vx);
+    denormalized_bboxes.push_back(vy);
+  }
+
+  return denormalized_bboxes;
+}
+
+double sigmoid(double x) {
+    return 1.0 / (1.0 + std::exp(-x));
+}
+
+std::vector<float> apply_sigmoid(const std::vector<float>& all_cls_scores) {
+  std::vector<float> sigmoid_scores;
+  sigmoid_scores.reserve(all_cls_scores.size());
+
+  for (const auto& score : all_cls_scores) {
+    sigmoid_scores.push_back(sigmoid(score));
+  }
+
+  return sigmoid_scores;
+}
+
+std::tuple<std::vector<float>, std::vector<int>, std::vector<std::vector<float>>> decode_results(
+  const std::vector<float> & all_bbox_preds,
+  const std::vector<float> & all_cls_scores,
+  const int max_num)
+{
+  const int NUM_CLASSES = 10;
+  const auto all_cls_scores_sigmoid = apply_sigmoid(all_cls_scores);
+
+  auto [sorted_indices, scores] = sort_with_indices_in_descending_order(all_cls_scores_sigmoid);
+
+  std::vector<int> labels;
+  std::vector<std::vector<float>> bboxes;
+  for (int i = 0; i < max_num; ++i) {
+    labels.push_back(sorted_indices[i] % NUM_CLASSES);
+    const int bbox_index = sorted_indices[i] / NUM_CLASSES;
+    const std::vector<float> bbox(
+      all_bbox_preds.begin() + bbox_index * 10,
+      all_bbox_preds.begin() + bbox_index * 10 + 10
+    );
+    bboxes.push_back(denormalize_bbox(bbox));
+  }
+  return std::make_tuple(scores, labels, bboxes);
+}
+
+std::vector<float> cast_to_float(const std::vector<double>& double_vector) {
+  std::vector<float> float_vector(double_vector.size());
+  std::transform(double_vector.begin(), double_vector.end(), float_vector.begin(),
+                [](double value) { return static_cast<float>(value); });
+  return float_vector;
+}
+
 StreamPetrNode::StreamPetrNode(const rclcpp::NodeOptions & node_options)
 : Node("tensorrt_stream_petr", node_options),
   confidence_threshold_(declare_parameter<double>("post_process_params.confidence_threshold"))
@@ -35,6 +147,8 @@ StreamPetrNode::StreamPetrNode(const rclcpp::NodeOptions & node_options)
   const std::string engine_head_path = declare_parameter<std::string>("model_params.engine_head_path");
   const std::string precision_backbone = declare_parameter<std::string>("model_params.precision_backbone");
   const std::string precision_head = declare_parameter<std::string>("model_params.precision_head");
+  const std::vector<double> point_cloud_range_double = declare_parameter<std::vector<double>>("model_params.point_cloud_range");
+  point_cloud_range_ = cast_to_float(point_cloud_range_double);
 
   // Subscriber
   sub_image_ = create_subscription<Image>(
@@ -153,23 +267,32 @@ void StreamPetrNode::inference(const int f, const std::string & data_dir) {
             << ", ptshead: " << dur_ptshead_->Elapsed() 
             << std::endl;
 
-  // cx, cy, cz, w, l, h, rot, vx, vy, vz???
+  // cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy
   const std::vector<float> all_bbox_preds = pts_head_->bindings["all_bbox_preds"]->cpu();
   const std::vector<float> all_cls_scores = pts_head_->bindings["all_cls_scores"]->cpu();
 
   // TODO(kminoda): resize beforehand
+  std::vector<float> scores;
+  std::vector<int> labels;
+  std::vector<std::vector<float>> bboxes;
+  std::tie(scores, labels, bboxes) = decode_results(all_bbox_preds, all_cls_scores, 300);
+
   std::vector<autoware_perception_msgs::msg::DetectedObject> raw_objects;
   size_t counter = 0;
-  while ((counter * 10) + 9 < all_bbox_preds.size()) {
-    DetectedObject object;
-    object.kinematics.pose_with_covariance.pose.position.x = all_bbox_preds[counter * 10 + 0];
-    object.kinematics.pose_with_covariance.pose.position.y = all_bbox_preds[counter * 10 + 1];
-    object.kinematics.pose_with_covariance.pose.position.z = all_bbox_preds[counter * 10 + 2];
-    object.shape.dimensions.x = all_bbox_preds[counter * 10 + 3];
-    object.shape.dimensions.y = all_bbox_preds[counter * 10 + 4];
-    object.shape.dimensions.z = all_bbox_preds[counter * 10 + 5];
+  for (size_t i = 0; i < bboxes.size(); ++i) {
+    const auto bbox = bboxes[i];
+    const float score = scores[i];
+    if (score < confidence_threshold_) continue;
 
-    const double yaw = all_bbox_preds[counter * 10 + 6];
+    // cx, cy, cz, w, l, h, rot, vx, vy
+    DetectedObject object;
+    object.kinematics.pose_with_covariance.pose.position.x = bbox[0];
+    object.kinematics.pose_with_covariance.pose.position.y = bbox[1];
+    object.kinematics.pose_with_covariance.pose.position.z = bbox[2];
+    object.shape.dimensions.x = bbox[3];
+    object.shape.dimensions.y = bbox[4];
+    object.shape.dimensions.z = bbox[5];
+    const double yaw = bbox[6];
     object.kinematics.pose_with_covariance.pose.orientation.w = cos(yaw * 0.5);
     object.kinematics.pose_with_covariance.pose.orientation.x = 0;
     object.kinematics.pose_with_covariance.pose.orientation.y = 0;
@@ -183,7 +306,8 @@ void StreamPetrNode::inference(const int f, const std::string & data_dir) {
   }
 
   DetectedObjects output_msg;
-  output_msg.objects = iou_bev_nms_.apply(raw_objects);
+  // output_msg.objects = iou_bev_nms_.apply(raw_objects);
+  output_msg.objects = raw_objects;
   pub_objects_->publish(output_msg);
 }
 

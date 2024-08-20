@@ -309,6 +309,7 @@ private:
   rclcpp::Publisher<DetectedObjects>::SharedPtr pub_objects_;
 
   const double confidence_threshold_;
+  std::vector<float> point_cloud_range_;
 
   NonMaximumSuppression iou_bev_nms_;
 
