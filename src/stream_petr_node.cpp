@@ -135,6 +135,9 @@ std::vector<float> cast_to_float(const std::vector<double>& double_vector) {
 
 StreamPetrNode::StreamPetrNode(const rclcpp::NodeOptions & node_options)
 : Node("tensorrt_stream_petr", node_options),
+  tf_buffer_(this->get_clock()),
+  tf_listener_(tf_buffer_),
+  rois_number_(static_cast<size_t>(declare_parameter<int>("rois_number", 6))),
   confidence_threshold_(declare_parameter<double>("post_process_params.confidence_threshold"))
 {
   RCLCPP_INFO(get_logger(), "nvinfer: %d.%d.%d\n", NV_TENSORRT_MAJOR, NV_TENSORRT_MINOR, NV_TENSORRT_PATCH);
@@ -152,9 +155,32 @@ StreamPetrNode::StreamPetrNode(const rclcpp::NodeOptions & node_options)
   const std::vector<double> point_cloud_range_double = declare_parameter<std::vector<double>>("model_params.point_cloud_range");
   point_cloud_range_ = cast_to_float(point_cloud_range_double);
 
-  // Subscriber
-  sub_image_ = create_subscription<Image>(
-    "~/input/image_raw", 10, std::bind(&StreamPetrNode::on_image, this, _1));
+  // Subscribers
+  camera_info_subs_.resize(rois_number_);
+  camera_image_subs_.resize(rois_number_);
+  for (size_t roi_i = 0; roi_i < rois_number_; ++roi_i) {
+    const std::string camera_info_topic = declare_parameter<std::string>(
+      "input/camera_info" + std::to_string(roi_i),
+      "/sensing/camera/camera" + std::to_string(roi_i) + "/camera_info");
+    const std::string camera_image_topic = declare_parameter<std::string>(
+      "input/image" + std::to_string(roi_i),
+      "/sensing/camera/camera" + std::to_string(roi_i) + "/image_rect_color");
+
+    camera_info_subs_.at(roi_i) = this->create_subscription<CameraInfo>(
+      camera_info_topic, rclcpp::QoS{1}.best_effort(),
+      [this, roi_i](const CameraInfo::ConstSharedPtr msg) {
+        this->camera_info_callback(msg, roi_i);
+      }
+    );
+    camera_image_subs_.at(roi_i) = this->create_subscription<Image>(
+      camera_image_topic, rclcpp::QoS{1}.best_effort(),
+      [this, roi_i](const Image::ConstSharedPtr msg) {
+        this->camera_image_callback(msg, roi_i);
+      }
+    );
+  }
+  
+  // Publishers
   pub_objects_ = this->create_publisher<DetectedObjects>("~/output/objects", rclcpp::QoS{1});
 
   // TensorRT
@@ -188,8 +214,18 @@ StreamPetrNode::StreamPetrNode(const rclcpp::NodeOptions & node_options)
   }
 }
 
-void StreamPetrNode::on_image(const Image & msg){
-  (void)msg;
+void StreamPetrNode::camera_info_callback(
+  CameraInfo::ConstSharedPtr input_camera_info_msg,
+  const std::size_t camera_id)
+{
+  camera_info_map_[camera_id] = input_camera_info_msg;
+}
+
+void StreamPetrNode::camera_image_callback(
+  Image::ConstSharedPtr input_camera_image_msg,
+  const std::size_t camera_id)
+{
+  camera_image_map_[camera_id] = input_camera_image_msg;
 }
 
 void StreamPetrNode::inference(const int f, const std::string & data_dir) {
@@ -244,21 +280,8 @@ void StreamPetrNode::inference(const int f, const std::string & data_dir) {
     stamp_current = reinterpret_cast<double*>(stamp_buf)[0];
     std::cout << "stamp: " << stamp_current << std::endl;
 
-    if( is_first_frame_ ) {
-      // binary is stored as double
-      pts_head_->bindings["pre_memory_timestamp"]->load<double, float>(frame_dir + "prev_memory_timestamp.bin");
-
-      // start from dumped values
-      pts_head_->bindings["pre_memory_embedding"]->load(frame_dir + "init_memory_embedding.bin");
-      pts_head_->bindings["pre_memory_reference_point"]->load(frame_dir + "init_memory_reference_point.bin");
-      pts_head_->bindings["pre_memory_egopose"]->load(frame_dir + "init_memory_egopose.bin");
-      pts_head_->bindings["pre_memory_velo"]->load(frame_dir + "init_memory_velo.bin");
-
-      is_first_frame_ = false;
-    } else {
-      // update timestamp
-      mem_.StepPre(stamp_current);
-    }        
+    // TODO: Properly initialize the first weights for the first frame
+    mem_.StepPre(stamp_current);
 
     pts_head_->bindings["data_ego_pose"]->load(frame_dir + "data_ego_pose.bin");
     pts_head_->bindings["data_ego_pose_inv"]->load(frame_dir + "data_ego_pose_inv.bin");

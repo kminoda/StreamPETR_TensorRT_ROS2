@@ -26,9 +26,13 @@
 #include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <string>
+#include <map>
 
 #include <autoware_perception_msgs/msg/detected_objects.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 
 // From NVIDIA/DL4AGX
 #include <iostream>
@@ -293,6 +297,7 @@ public:
 class StreamPetrNode : public rclcpp::Node
 {
   using Image = sensor_msgs::msg::Image;
+  using CameraInfo = sensor_msgs::msg::CameraInfo;
   using DetectedObjects = autoware_perception_msgs::msg::DetectedObjects;
   using DetectedObject = autoware_perception_msgs::msg::DetectedObject;
 
@@ -301,11 +306,22 @@ public:
 
 private:
   void inference(const int f, const std::string & data_dir);
-  void on_image(const Image & msg);
+  void camera_info_callback(
+    CameraInfo::ConstSharedPtr input_camera_info_msg,
+    const std::size_t camera_id);
+  void camera_image_callback(
+    Image::ConstSharedPtr input_camera_image_msg,
+    const std::size_t camera_id);
 
-  rclcpp::Subscription<Image>::SharedPtr sub_image_;
+  std::map<std::size_t, CameraInfo::ConstSharedPtr> camera_info_map_;
+  std::map<std::size_t, Image::ConstSharedPtr> camera_image_map_;
+  std::vector<rclcpp::Subscription<CameraInfo>::SharedPtr> camera_info_subs_;
+  std::vector<rclcpp::Subscription<Image>::SharedPtr> camera_image_subs_;
   rclcpp::Publisher<DetectedObjects>::SharedPtr pub_objects_;
 
+  tf2_ros::Buffer tf_buffer_;
+  tf2_ros::TransformListener tf_listener_;
+  const size_t rois_number_;
   const double confidence_threshold_;
   std::vector<float> point_cloud_range_;
 
@@ -317,7 +333,6 @@ private:
   std::unique_ptr<Duration> dur_pos_embed_;
   Memory mem_;
   cudaStream_t stream_; 
-  bool is_first_frame_ = false;
 };
 
 }  // namespace tensorrt_stream_petr
