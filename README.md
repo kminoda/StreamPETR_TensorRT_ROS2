@@ -2,7 +2,7 @@
 
 - [x] Inference from bin files
 - [x] Inference from bin files with position embedding computed online
-- [] Inference from bin files with position embedding computed at the initial step
+- [x] Inference from bin files with position embedding computed at the initial step
 - [ ] Inference from ROS topics for NuScenes dataset
 
 ## Setup
