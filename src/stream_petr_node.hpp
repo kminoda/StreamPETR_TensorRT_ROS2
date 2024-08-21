@@ -46,8 +46,6 @@
 #include "memory.cuh"
 // From NVIDIA/DL4AGX
 
-#include "non_maximum_suppression.hpp"
-
 namespace tensorrt_stream_petr
 {
 // Taken from NVIDIA/DL4AGX
@@ -310,8 +308,6 @@ private:
 
   const double confidence_threshold_;
   std::vector<float> point_cloud_range_;
-
-  NonMaximumSuppression iou_bev_nms_;
 
   std::unique_ptr<SubNetwork> backbone_;
   std::unique_ptr<SubNetwork> pts_head_;

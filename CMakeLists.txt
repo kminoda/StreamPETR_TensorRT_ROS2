@@ -99,9 +99,6 @@ include_directories(
 
 ament_auto_add_library(stream_petr_node_component SHARED
   src/stream_petr_node.cpp
-  src/non_maximum_suppression.cpp
-  src/ros_utils.cpp
-  src/utils.cpp
 )
 
 cuda_add_library(stream_petr_node_cuda_lib SHARED

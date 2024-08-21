@@ -156,18 +156,6 @@ StreamPetrNode::StreamPetrNode(const rclcpp::NodeOptions & node_options)
   sub_image_ = create_subscription<Image>(
     "~/input/image_raw", 10, std::bind(&StreamPetrNode::on_image, this, _1));
   pub_objects_ = this->create_publisher<DetectedObjects>("~/output/objects", rclcpp::QoS{1});
-  
-  // NMS
-  {  // IoU NMS
-    NMSParams p;
-    p.nms_type_ = NMS_TYPE::IoU_BEV;
-    p.target_class_names_ =
-      this->declare_parameter<std::vector<std::string>>("post_process_params.iou_nms_target_class_names");
-    p.search_distance_2d_ =
-      this->declare_parameter<double>("post_process_params.iou_nms_search_distance_2d");
-    p.iou_threshold_ = this->declare_parameter<double>("post_process_params.iou_nms_threshold");
-    iou_bev_nms_.setParameters(p);
-  }
 
   // TensorRT
   auto runtime_deleter = [](IRuntime *runtime) { (void)runtime; /* runtime->destroy(); */ };
@@ -337,7 +325,6 @@ void StreamPetrNode::inference(const int f, const std::string & data_dir) {
   }
 
   DetectedObjects output_msg;
-  // output_msg.objects = iou_bev_nms_.apply(raw_objects);
   output_msg.objects = raw_objects;
   pub_objects_->publish(output_msg);
 }
