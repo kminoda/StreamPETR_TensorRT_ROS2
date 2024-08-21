@@ -145,8 +145,10 @@ StreamPetrNode::StreamPetrNode(const rclcpp::NodeOptions & node_options)
   // Initialize parameters
   const std::string engine_backbone_path = declare_parameter<std::string>("model_params.engine_backbone_path");
   const std::string engine_head_path = declare_parameter<std::string>("model_params.engine_head_path");
+  const std::string engine_position_embedding_path = declare_parameter<std::string>("model_params.engine_position_embedding_path");
   const std::string precision_backbone = declare_parameter<std::string>("model_params.precision_backbone");
   const std::string precision_head = declare_parameter<std::string>("model_params.precision_head");
+  const std::string precision_position_embedding = declare_parameter<std::string>("model_params.precision_position_embedding");
   const std::vector<double> point_cloud_range_double = declare_parameter<std::vector<double>>("model_params.point_cloud_range");
   point_cloud_range_ = cast_to_float(point_cloud_range_double);
 
@@ -172,10 +174,12 @@ StreamPetrNode::StreamPetrNode(const rclcpp::NodeOptions & node_options)
   std::unique_ptr<IRuntime, decltype(runtime_deleter)> runtime{createInferRuntime(gLogger), runtime_deleter};
   backbone_ = std::make_unique<SubNetwork>(engine_backbone_path, runtime.get());
   pts_head_ = std::make_unique<SubNetwork>(engine_head_path, runtime.get());
+  pos_embed_ = std::make_unique<SubNetwork>(engine_position_embedding_path, runtime.get());
 
   cudaStreamCreate(&stream_);
   backbone_->EnableCudaGraph(stream_);
   pts_head_->EnableCudaGraph(stream_);
+  pos_embed_->EnableCudaGraph(stream_);
 
   mem_.mem_stream = stream_;
   mem_.pre_buf = (float*)pts_head_->bindings["pre_memory_timestamp"]->ptr;
@@ -184,6 +188,7 @@ StreamPetrNode::StreamPetrNode(const rclcpp::NodeOptions & node_options)
   // events for measurement
   dur_backbone_ = std::make_unique<Duration>("backbone");
   dur_ptshead_ = std::make_unique<Duration>("ptshead");
+  dur_pos_embed_ = std::make_unique<Duration>("pos_embed");
 
   const std::filesystem::path data_dir{this->declare_parameter<std::string>("temporary_params.bins_directory_path")};
   const int n_frames = std::distance(std::filesystem::directory_iterator(data_dir), std::filesystem::directory_iterator{});
@@ -205,64 +210,90 @@ void StreamPetrNode::inference(const int f, const std::string & data_dir) {
   sprintf(buf, "%04d", f);
   std::string frame_dir = data_dir + std::string(buf) + "/";
   std::cout << frame_dir << std::endl;
-  // img
-  backbone_->bindings["img"]->load(frame_dir + "img.bin");
-
-  dur_backbone_->MarkBegin(stream_);
-  // inference
-  backbone_->Enqueue(stream_);
-  dur_backbone_->MarkEnd(stream_);
-
-  cudaMemcpyAsync(
-    pts_head_->bindings["x"]->ptr,
-    backbone_->bindings["img_feats"]->ptr, 
-    backbone_->bindings["img_feats"]->nbytes(), 
-    cudaMemcpyDeviceToDevice, stream_);
-
-  pts_head_->bindings["pos_embed"]->load(frame_dir + "pos_embed.bin");
-  pts_head_->bindings["cone"]->load(frame_dir + "cone.bin");
   
-  // load double timestamp from file
-  double stamp_current = 0.0;
-  char stamp_buf[8];
-  std::ifstream file_(frame_dir + "data_timestamp.bin", std::ios::binary);
-  file_.read(stamp_buf, sizeof(double));
-  stamp_current = reinterpret_cast<double*>(stamp_buf)[0];
-  std::cout << "stamp: " << stamp_current << std::endl;
+  if (f == 0) { // position embedding execution
+    pos_embed_->bindings["img_metas_pad"]->load<int, int>(frame_dir + "img_metas_pad.bin");
+    pos_embed_->bindings["intrinsics"]->load(frame_dir + "intrinsics.bin");
+    pos_embed_->bindings["img2lidar"]->load(frame_dir + "img2lidar.bin");
 
-  if( is_first_frame_ ) {
-    // binary is stored as double
-    pts_head_->bindings["pre_memory_timestamp"]->load<double, float>(frame_dir + "prev_memory_timestamp.bin");
+    dur_pos_embed_->MarkBegin(stream_);
+    pos_embed_->Enqueue(stream_);
+    dur_pos_embed_->MarkEnd(stream_);
 
-    // start from dumped values
-    pts_head_->bindings["pre_memory_embedding"]->load(frame_dir + "init_memory_embedding.bin");
-    pts_head_->bindings["pre_memory_reference_point"]->load(frame_dir + "init_memory_reference_point.bin");
-    pts_head_->bindings["pre_memory_egopose"]->load(frame_dir + "init_memory_egopose.bin");
-    pts_head_->bindings["pre_memory_velo"]->load(frame_dir + "init_memory_velo.bin");
+    cudaMemcpyAsync(
+      pts_head_->bindings["pos_embed"]->ptr,
+      pos_embed_->bindings["pos_embed"]->ptr, 
+      pos_embed_->bindings["pos_embed"]->nbytes(), 
+      cudaMemcpyDeviceToDevice, stream_);
+    cudaMemcpyAsync(
+      pts_head_->bindings["cone"]->ptr,
+      pos_embed_->bindings["cone"]->ptr, 
+      pos_embed_->bindings["cone"]->nbytes(), 
+      cudaMemcpyDeviceToDevice, stream_);
+  }
 
-    is_first_frame_ = false;
-  } else {
-    // update timestamp
-    mem_.StepPre(stamp_current);
-  }        
+  { // feature extraction execution
+    backbone_->bindings["img"]->load(frame_dir + "img.bin");
 
-  pts_head_->bindings["data_ego_pose"]->load(frame_dir + "data_ego_pose.bin");
-  pts_head_->bindings["data_ego_pose_inv"]->load(frame_dir + "data_ego_pose_inv.bin");
+    dur_backbone_->MarkBegin(stream_);
+    // inference
+    backbone_->Enqueue(stream_);
+    dur_backbone_->MarkEnd(stream_);
 
-  // inference
-  dur_ptshead_->MarkBegin(stream_);
-  pts_head_->Enqueue(stream_);
-  dur_ptshead_->MarkEnd(stream_);
-  mem_.StepPost(stamp_current);
+    cudaMemcpyAsync(
+      pts_head_->bindings["x"]->ptr,
+      backbone_->bindings["img_feats"]->ptr, 
+      backbone_->bindings["img_feats"]->nbytes(), 
+      cudaMemcpyDeviceToDevice, stream_);
+  }
 
-  // copy mem_post to mem_pre for next round
-  pts_head_->bindings["pre_memory_embedding"]->mov(pts_head_->bindings["post_memory_embedding"], stream_);
-  pts_head_->bindings["pre_memory_reference_point"]->mov(pts_head_->bindings["post_memory_reference_point"], stream_);
-  pts_head_->bindings["pre_memory_egopose"]->mov(pts_head_->bindings["post_memory_egopose"], stream_);
-  pts_head_->bindings["pre_memory_velo"]->mov(pts_head_->bindings["post_memory_velo"], stream_);
-  
+  { // backbone execution
+    // load double timestamp from file
+    double stamp_current = 0.0;
+    char stamp_buf[8];
+    std::ifstream file_(frame_dir + "data_timestamp.bin", std::ios::binary);
+    file_.read(stamp_buf, sizeof(double));
+    stamp_current = reinterpret_cast<double*>(stamp_buf)[0];
+    std::cout << "stamp: " << stamp_current << std::endl;
+
+    if( is_first_frame_ ) {
+      // binary is stored as double
+      pts_head_->bindings["pre_memory_timestamp"]->load<double, float>(frame_dir + "prev_memory_timestamp.bin");
+
+      // start from dumped values
+      pts_head_->bindings["pre_memory_embedding"]->load(frame_dir + "init_memory_embedding.bin");
+      pts_head_->bindings["pre_memory_reference_point"]->load(frame_dir + "init_memory_reference_point.bin");
+      pts_head_->bindings["pre_memory_egopose"]->load(frame_dir + "init_memory_egopose.bin");
+      pts_head_->bindings["pre_memory_velo"]->load(frame_dir + "init_memory_velo.bin");
+
+      is_first_frame_ = false;
+    } else {
+      // update timestamp
+      mem_.StepPre(stamp_current);
+    }        
+
+    pts_head_->bindings["data_ego_pose"]->load(frame_dir + "data_ego_pose.bin");
+    pts_head_->bindings["data_ego_pose_inv"]->load(frame_dir + "data_ego_pose_inv.bin");
+
+    // inference
+    dur_ptshead_->MarkBegin(stream_);
+    pts_head_->Enqueue(stream_);
+    dur_ptshead_->MarkEnd(stream_);
+    mem_.StepPost(stamp_current);
+
+    // copy mem_post to mem_pre for next round
+    pts_head_->bindings["pre_memory_embedding"]->mov(pts_head_->bindings["post_memory_embedding"], stream_);
+    pts_head_->bindings["pre_memory_reference_point"]->mov(pts_head_->bindings["post_memory_reference_point"], stream_);
+    pts_head_->bindings["pre_memory_egopose"]->mov(pts_head_->bindings["post_memory_egopose"], stream_);
+    pts_head_->bindings["pre_memory_velo"]->mov(pts_head_->bindings["post_memory_velo"], stream_);
+  }
+
   cudaStreamSynchronize(stream_);
 
+  if (f == 0) {
+    std::cout << "position embedding: " << dur_pos_embed_->Elapsed()
+              << std::endl;
+  }
   std::cout << "backbone: " << dur_backbone_->Elapsed() 
             << ", ptshead: " << dur_ptshead_->Elapsed() 
             << std::endl;

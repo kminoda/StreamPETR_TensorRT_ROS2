@@ -315,8 +315,10 @@ private:
 
   std::unique_ptr<SubNetwork> backbone_;
   std::unique_ptr<SubNetwork> pts_head_;
+  std::unique_ptr<SubNetwork> pos_embed_;
   std::unique_ptr<Duration> dur_backbone_;
   std::unique_ptr<Duration> dur_ptshead_;
+  std::unique_ptr<Duration> dur_pos_embed_;
   Memory mem_;
   cudaStream_t stream_; 
   bool is_first_frame_ = false;

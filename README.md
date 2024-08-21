@@ -1,15 +1,17 @@
 # TensorRT StreamPETR
 
 - [x] Inference from bin files
-- [ ] Inference from bin files with position embedding computed online
-- [ ] Inference from bin files with position embedding computed at the initial step
+- [x] Inference from bin files with position embedding computed online
+- [] Inference from bin files with position embedding computed at the initial step
 - [ ] Inference from ROS topics for NuScenes dataset
 
 ## Setup
 
 ### Step 1: Prepare ONNX
 
-Follow [ONNX conversion instruction from official repository and NVIDIA](https://github.com/NVIDIA/DL4AGX/blob/9a4f60c2847d32e81372b9a2165299a3b65eabf1/AV-Solutions/streampetr-trt/conversion/README.md)
+Follow [ONNX conversion instruction from official repository and NVIDIA](https://github.com/NVIDIA/DL4AGX/blob/9a4f60c2847d32e81372b9a2165299a3b65eabf1/AV-Solutions/streampetr-trt/conversion/README.md).
+
+For StreamPETR repository, please use this one: https://github.com/kminoda/StreamPETR/blob/main/tools/pth2onnx.py
 
 ### Step 1.5: Prepare temporary bin files
 

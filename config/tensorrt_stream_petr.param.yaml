@@ -5,8 +5,10 @@
     model_params:
       engine_backbone_path: "$(var model_path)/simplify_extract_img_feat.engine"
       engine_head_path: "$(var model_path)/simplify_pts_head_memory.engine"
+      engine_position_embedding_path: "$(var model_path)/simplify_position_embedding.engine"
       precision_backbone: "fp32"
       precision_head: "fp32"
+      precision_position_embedding: "fp32"
       point_cloud_range: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
     post_process_params:
       confidence_threshold: 0.5
