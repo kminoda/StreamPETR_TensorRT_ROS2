@@ -236,9 +236,11 @@ void StreamPetrNode::inference(const int f, const std::string & data_dir) {
   std::cout << frame_dir << std::endl;
   
   if (f == 0) { // position embedding execution
+    /////////// REPLACE THIS PART WITH ROS TOPIC INFO ///////////
     pos_embed_->bindings["img_metas_pad"]->load<int, int>(frame_dir + "img_metas_pad.bin");
     pos_embed_->bindings["intrinsics"]->load(frame_dir + "intrinsics.bin");
     pos_embed_->bindings["img2lidar"]->load(frame_dir + "img2lidar.bin");
+    /////////// REPLACE THIS PART WITH ROS TOPIC INFO ///////////
 
     dur_pos_embed_->MarkBegin(stream_);
     pos_embed_->Enqueue(stream_);
@@ -256,9 +258,19 @@ void StreamPetrNode::inference(const int f, const std::string & data_dir) {
       cudaMemcpyDeviceToDevice, stream_);
   }
 
-  { // feature extraction execution
-    backbone_->bindings["img"]->load(frame_dir + "img.bin");
+  // load necessary data
+  /////////// REPLACE THIS PART WITH ROS TOPIC INFO ///////////
+  backbone_->bindings["img"]->load(frame_dir + "img.bin");
+  pts_head_->bindings["data_ego_pose"]->load(frame_dir + "data_ego_pose.bin");
+  pts_head_->bindings["data_ego_pose_inv"]->load(frame_dir + "data_ego_pose_inv.bin");
 
+  char stamp_buf[8];
+  std::ifstream file_(frame_dir + "data_timestamp.bin", std::ios::binary);
+  file_.read(stamp_buf, sizeof(double));
+  double stamp_current = reinterpret_cast<double*>(stamp_buf)[0];
+  /////////// REPLACE THIS PART WITH ROS TOPIC INFO ///////////
+
+  { // feature extraction execution
     dur_backbone_->MarkBegin(stream_);
     // inference
     backbone_->Enqueue(stream_);
@@ -272,19 +284,8 @@ void StreamPetrNode::inference(const int f, const std::string & data_dir) {
   }
 
   { // backbone execution
-    // load double timestamp from file
-    double stamp_current = 0.0;
-    char stamp_buf[8];
-    std::ifstream file_(frame_dir + "data_timestamp.bin", std::ios::binary);
-    file_.read(stamp_buf, sizeof(double));
-    stamp_current = reinterpret_cast<double*>(stamp_buf)[0];
-    std::cout << "stamp: " << stamp_current << std::endl;
-
     // TODO: Properly initialize the first weights for the first frame
     mem_.StepPre(stamp_current);
-
-    pts_head_->bindings["data_ego_pose"]->load(frame_dir + "data_ego_pose.bin");
-    pts_head_->bindings["data_ego_pose_inv"]->load(frame_dir + "data_ego_pose_inv.bin");
 
     // inference
     dur_ptshead_->MarkBegin(stream_);

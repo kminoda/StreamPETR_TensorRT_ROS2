@@ -145,6 +145,26 @@ struct Tensor {
   }
 
   template<class Htype=float, class Dtype=float>
+  void load_from_vector(const std::vector<Htype> &data) {
+    if (data.size() != volume) {
+      std::cerr << "Data size mismatch! Expected " << volume << " elements." << std::endl;
+      return;
+    }
+
+    size_t dsize = volume * getElementSize(dtype);
+    std::vector<char> b2(dsize);
+
+    // Convert and copy data from Htype to Dtype
+    Dtype* dbuffer = reinterpret_cast<Dtype*>(b2.data());
+    for (int i = 0; i < volume; i++) {
+      dbuffer[i] = static_cast<Dtype>(data[i]);
+    }
+
+    // Copy to CUDA device memory
+    cudaMemcpy(ptr, b2.data(), dsize, cudaMemcpyHostToDevice);
+  }
+
+  template<class Htype=float, class Dtype=float>
   void save(std::string fname) {
     size_t hsize = volume * sizeof(Htype);
     size_t dsize = volume * getElementSize(dtype);
