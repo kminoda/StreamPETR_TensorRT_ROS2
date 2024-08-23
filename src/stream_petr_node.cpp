@@ -102,6 +102,28 @@ std::vector<float> apply_sigmoid(const std::vector<float>& all_cls_scores) {
   return sigmoid_scores;
 }
 
+autoware_perception_msgs::msg::DetectedObject bbox_to_ros_msg(const std::vector<float> & bbox)
+{
+  // cx, cy, cz, w, l, h, rot, vx, vy
+  autoware_perception_msgs::msg::DetectedObject object;
+  object.kinematics.pose_with_covariance.pose.position.x = bbox[0];
+  object.kinematics.pose_with_covariance.pose.position.y = bbox[1];
+  object.kinematics.pose_with_covariance.pose.position.z = bbox[2];
+  object.shape.dimensions.x = bbox[3];
+  object.shape.dimensions.y = bbox[4];
+  object.shape.dimensions.z = bbox[5];
+  const double yaw = bbox[6];
+  object.kinematics.pose_with_covariance.pose.orientation.w = cos(yaw * 0.5);
+  object.kinematics.pose_with_covariance.pose.orientation.x = 0;
+  object.kinematics.pose_with_covariance.pose.orientation.y = 0;
+  object.kinematics.pose_with_covariance.pose.orientation.z = sin(yaw * 0.5);
+
+  object.kinematics.has_position_covariance = false;
+  object.kinematics.has_twist = false;
+  object.shape.type = 0;
+  return object;
+}
+
 std::tuple<std::vector<float>, std::vector<int>, std::vector<std::vector<float>>> decode_results(
   const std::vector<float> & all_bbox_preds,
   const std::vector<float> & all_cls_scores,
@@ -321,35 +343,16 @@ void StreamPetrNode::inference(const int f, const std::string & data_dir) {
   std::tie(scores, labels, bboxes) = decode_results(all_bbox_preds, all_cls_scores, 300);
 
   std::vector<autoware_perception_msgs::msg::DetectedObject> raw_objects;
-  size_t counter = 0;
   for (size_t i = 0; i < bboxes.size(); ++i) {
-    const auto bbox = bboxes[i];
     const float score = scores[i];
-    if (score < confidence_threshold_) continue;
-
-    // cx, cy, cz, w, l, h, rot, vx, vy
-    DetectedObject object;
-    object.kinematics.pose_with_covariance.pose.position.x = bbox[0];
-    object.kinematics.pose_with_covariance.pose.position.y = bbox[1];
-    object.kinematics.pose_with_covariance.pose.position.z = bbox[2];
-    object.shape.dimensions.x = bbox[3];
-    object.shape.dimensions.y = bbox[4];
-    object.shape.dimensions.z = bbox[5];
-    const double yaw = bbox[6];
-    object.kinematics.pose_with_covariance.pose.orientation.w = cos(yaw * 0.5);
-    object.kinematics.pose_with_covariance.pose.orientation.x = 0;
-    object.kinematics.pose_with_covariance.pose.orientation.y = 0;
-    object.kinematics.pose_with_covariance.pose.orientation.z = sin(yaw * 0.5);
-
-    object.kinematics.has_position_covariance = false;
-    object.kinematics.has_twist = false;
-    object.shape.type = 0;
-    raw_objects.push_back(object);
-    ++counter;
+    if (score > confidence_threshold_) {
+      raw_objects.push_back(bbox_to_ros_msg(bboxes[i]));
+    }
   }
 
   DetectedObjects output_msg;
   output_msg.objects = raw_objects;
+  output_msg.header.frame_id = "base_link";
   pub_objects_->publish(output_msg);
 }
 
