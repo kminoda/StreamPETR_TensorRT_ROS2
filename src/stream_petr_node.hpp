@@ -15,24 +15,23 @@
 #ifndef TENSORRT_STREAM_PETR__STREAM_PETR_NODE_HPP__
 #define TENSORRT_STREAM_PETR__STREAM_PETR_NODE_HPP__
 
-#if __has_include(<cv_bridge/cv_bridge.hpp>)
-#include <cv_bridge/cv_bridge.hpp>
-#else
-#include <cv_bridge/cv_bridge.h>
-#endif
 
 #include <image_transport/image_transport.hpp>
 #include <memory>
-#include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <string>
 #include <map>
 
 #include <autoware_perception_msgs/msg/detected_objects.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <geometry_msgs/msg/pose.hpp>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
+#include <tf2_ros/static_transform_broadcaster.h>
+#include <tf2_msgs/msg/tf_message.hpp>
 
 // From NVIDIA/DL4AGX
 #include <iostream>
@@ -49,6 +48,8 @@
 #include <NvInferRuntime.h>
 #include "memory.cuh"
 // From NVIDIA/DL4AGX
+
+#include "camera_data_store.hpp"
 
 namespace tensorrt_stream_petr
 {
@@ -109,82 +110,40 @@ struct Tensor {
     cudaMalloc(&ptr, volume * getElementSize(dtype));
   }
 
-  int32_t nbytes() {
+  int32_t nbytes() const {
     return volume * getElementSize(dtype);
   }
 
   void mov(std::shared_ptr<Tensor> other, cudaStream_t stream) {
     // copy from 'other'
     cudaMemcpyAsync(
-        ptr, other->ptr, 
-        nbytes(), 
-        cudaMemcpyHostToDevice,
-        stream);
+      ptr, other->ptr, 
+      nbytes(), 
+      cudaMemcpyHostToDevice,
+      stream);
   }
 
-  template<class Htype=float, class Dtype=float>
-  void load(std::string fname) {
-    size_t hsize = volume * sizeof(Htype);
-    size_t dsize = volume * getElementSize(dtype);
-    std::vector<char> b1(hsize);
-    std::vector<char> b2(dsize);
-    std::ifstream file_(fname, std::ios::binary);
-    if( file_.fail() ) {
-      std::cerr << fname << " missing!" << std::endl;
-      return;
-    }
-    file_.read(b1.data(), hsize);
-    Htype* hbuffer = reinterpret_cast<Htype*>(b1.data());
-    Dtype* dbuffer = reinterpret_cast<Dtype*>(b2.data());
-    // in some cases we want to load from different dtype
-    for( int i=0; i<volume; i++ ) {
-      dbuffer[i] = (Dtype)hbuffer[i];
-    }
-
-    cudaMemcpy(ptr, b2.data(), dsize, cudaMemcpyHostToDevice);
-  }
-
-  template<class Htype=float, class Dtype=float>
+  // template<class Htype=float, class Dtype=float>
+  template<class Htype=float>
   void load_from_vector(const std::vector<Htype> &data) {
-    if (data.size() != volume) {
+    std::cerr << "KOJI!!! load_from_vector started, size = " << data.size() << ", volume = " << volume << std::endl;
+    if (data.size() != static_cast<size_t>(volume)) {
       std::cerr << "Data size mismatch! Expected " << volume << " elements." << std::endl;
       return;
     }
 
     size_t dsize = volume * getElementSize(dtype);
-    std::vector<char> b2(dsize);
+    // std::vector<char> b2(dsize);
 
-    // Convert and copy data from Htype to Dtype
-    Dtype* dbuffer = reinterpret_cast<Dtype*>(b2.data());
-    for (int i = 0; i < volume; i++) {
-      dbuffer[i] = static_cast<Dtype>(data[i]);
-    }
+    // // Convert and copy data from Htype to Dtype
+    // Dtype* dbuffer = reinterpret_cast<Dtype*>(b2.data());
+    // for (int i = 0; i < volume; i++) {
+    //   dbuffer[i] = static_cast<Dtype>(data[i]);
+    // }
 
-    // Copy to CUDA device memory
-    cudaMemcpy(ptr, b2.data(), dsize, cudaMemcpyHostToDevice);
-  }
-
-  template<class Htype=float, class Dtype=float>
-  void save(std::string fname) {
-    size_t hsize = volume * sizeof(Htype);
-    size_t dsize = volume * getElementSize(dtype);
-    std::vector<char> b1(hsize);
-    std::vector<char> b2(dsize);
-    std::ofstream file_(fname, std::ios::binary);
-    if( file_.fail() ) {
-      std::cerr << fname << " can't open!" << std::endl;
-      return;
-    }
-    // file_.read(b1.data(), hsize);
-    Htype* hbuffer = reinterpret_cast<Htype*>(b1.data());
-    Dtype* dbuffer = reinterpret_cast<Dtype*>(b2.data());
-    cudaMemcpy(b2.data(), ptr, dsize, cudaMemcpyDeviceToHost);
-    // in some cases we want to load from different dtype
-    for( int i=0; i<volume; i++ ) {
-      hbuffer[i] = (Htype)dbuffer[i];
-    }
-    file_.write(b2.data(), hsize);
-    file_.close();
+    // // Copy to CUDA device memory
+    // cudaMemcpy(ptr, b2.data(), dsize, cudaMemcpyHostToDevice);
+    cudaMemcpy(ptr, data.data(), dsize, cudaMemcpyHostToDevice);
   }
 
   std::vector<float> cpu() {
@@ -316,6 +275,7 @@ public:
 
 class StreamPetrNode : public rclcpp::Node
 {
+  using Odometry = nav_msgs::msg::Odometry;
   using Image = sensor_msgs::msg::Image;
   using CameraInfo = sensor_msgs::msg::CameraInfo;
   using DetectedObjects = autoware_perception_msgs::msg::DetectedObjects;
@@ -326,15 +286,26 @@ public:
 
 private:
   void inference(const int f, const std::string & data_dir);
+  void odometry_callback(Odometry::ConstSharedPtr input_msg);
   void camera_info_callback(
     CameraInfo::ConstSharedPtr input_camera_info_msg,
     const std::size_t camera_id);
   void camera_image_callback(
     Image::ConstSharedPtr input_camera_image_msg,
     const std::size_t camera_id);
-
-  std::map<std::size_t, CameraInfo::ConstSharedPtr> camera_info_map_;
-  std::map<std::size_t, Image::ConstSharedPtr> camera_image_map_;
+  std::pair<std::vector<float>, std::vector<float>> get_ego_pose_vector() const;
+  void inference_position_embedding(
+    const std::vector<int> & img_metas_pad,
+    const std::vector<float> & intrinsics,
+    const std::vector<float> & img2lidar);
+  void inference_detector(
+    const std::vector<float> & imgs,
+    const std::vector<float> & ego_pose,
+    const std::vector<float> & ego_pose_inv,
+    const double stamp);
+  std::vector<float> get_camera_extrinsics_vector(
+    const std::vector<std::string> & camera_links);
+  rclcpp::Subscription<Odometry>::SharedPtr localization_sub_;
   std::vector<rclcpp::Subscription<CameraInfo>::SharedPtr> camera_info_subs_;
   std::vector<rclcpp::Subscription<Image>::SharedPtr> camera_image_subs_;
   rclcpp::Publisher<DetectedObjects>::SharedPtr pub_objects_;
@@ -344,7 +315,11 @@ private:
   const size_t rois_number_;
   const double confidence_threshold_;
   std::vector<float> point_cloud_range_;
+  Odometry::ConstSharedPtr initial_kinematic_state_ = nullptr;
+  Odometry::ConstSharedPtr latest_kinematic_state_ = nullptr;
+  bool is_inference_initialized_ = false;
 
+  std::unique_ptr<CameraDataStore> data_store_;
   std::unique_ptr<SubNetwork> backbone_;
   std::unique_ptr<SubNetwork> pts_head_;
   std::unique_ptr<SubNetwork> pos_embed_;

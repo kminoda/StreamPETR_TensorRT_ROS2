@@ -177,7 +177,12 @@ StreamPetrNode::StreamPetrNode(const rclcpp::NodeOptions & node_options)
   const std::vector<double> point_cloud_range_double = declare_parameter<std::vector<double>>("model_params.point_cloud_range");
   point_cloud_range_ = cast_to_float(point_cloud_range_double);
 
-  // Subscribers
+  localization_sub_ = this->create_subscription<Odometry>(
+      "/localization/kinematic_state", rclcpp::QoS{1},
+      [this](const Odometry::ConstSharedPtr msg) {
+        this->odometry_callback(msg);
+      }
+    );
   camera_info_subs_.resize(rois_number_);
   camera_image_subs_.resize(rois_number_);
   for (size_t roi_i = 0; roi_i < rois_number_; ++roi_i) {
@@ -205,6 +210,13 @@ StreamPetrNode::StreamPetrNode(const rclcpp::NodeOptions & node_options)
   // Publishers
   pub_objects_ = this->create_publisher<DetectedObjects>("~/output/objects", rclcpp::QoS{1});
 
+  // Data store
+  data_store_ = std::make_unique<CameraDataStore>(
+    this, rois_number_,
+    declare_parameter<int>("model_params.input_image_height"),
+    declare_parameter<int>("model_params.input_image_width")
+  );
+
   // TensorRT
   auto runtime_deleter = [](IRuntime *runtime) { (void)runtime; /* runtime->destroy(); */ };
   std::unique_ptr<IRuntime, decltype(runtime_deleter)> runtime{createInferRuntime(gLogger), runtime_deleter};
@@ -226,71 +238,187 @@ StreamPetrNode::StreamPetrNode(const rclcpp::NodeOptions & node_options)
   dur_ptshead_ = std::make_unique<Duration>("ptshead");
   dur_pos_embed_ = std::make_unique<Duration>("pos_embed");
 
-  const std::filesystem::path data_dir{this->declare_parameter<std::string>("temporary_params.bins_directory_path")};
-  const int n_frames = std::distance(std::filesystem::directory_iterator(data_dir), std::filesystem::directory_iterator{});
-  RCLCPP_INFO(get_logger(), "Total frames: %d\n", n_frames);
+  // const std::filesystem::path data_dir{this->declare_parameter<std::string>("temporary_params.bins_directory_path")};
+  // const int n_frames = std::distance(std::filesystem::directory_iterator(data_dir), std::filesystem::directory_iterator{});
+  // RCLCPP_INFO(get_logger(), "Total frames: %d\n", n_frames);
 
-  for (int i = 0; i < n_frames; ++i) {
-    inference(i, data_dir);
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  // for (int i = 0; i < n_frames; ++i) {
+  //   inference(i, data_dir);
+  //   std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  // }
+}
+
+void StreamPetrNode::odometry_callback(
+  Odometry::ConstSharedPtr input_msg)
+{
+  if (!initial_kinematic_state_) {
+    initial_kinematic_state_ = input_msg;
   }
+  latest_kinematic_state_ = input_msg;
+  return;
 }
 
 void StreamPetrNode::camera_info_callback(
   CameraInfo::ConstSharedPtr input_camera_info_msg,
   const std::size_t camera_id)
 {
-  camera_info_map_[camera_id] = input_camera_info_msg;
+  std::cout << "KOJI!!!! camera info callback @" << camera_id << std::endl;
+  data_store_->update_camera_info(camera_id, input_camera_info_msg);
 }
 
 void StreamPetrNode::camera_image_callback(
   Image::ConstSharedPtr input_camera_image_msg,
   const std::size_t camera_id)
 {
-  camera_image_map_[camera_id] = input_camera_image_msg;
-}
+  std::cout << "KOJI!!!! camera image callback @" << camera_id << std::endl;
+  data_store_->update_camera_image(camera_id, input_camera_image_msg);
+  RCLCPP_INFO(get_logger(), "received camera %d", static_cast<int>(camera_id));
 
-void StreamPetrNode::inference(const int f, const std::string & data_dir) {
-  // load data
-  char buf[5] = {0};
-  sprintf(buf, "%04d", f);
-  std::string frame_dir = data_dir + std::string(buf) + "/";
-  std::cout << frame_dir << std::endl;
-  
-  if (f == 0) { // position embedding execution
-    /////////// REPLACE THIS PART WITH ROS TOPIC INFO ///////////
-    pos_embed_->bindings["img_metas_pad"]->load<int, int>(frame_dir + "img_metas_pad.bin");
-    pos_embed_->bindings["intrinsics"]->load(frame_dir + "intrinsics.bin");
-    pos_embed_->bindings["img2lidar"]->load(frame_dir + "img2lidar.bin");
-    /////////// REPLACE THIS PART WITH ROS TOPIC INFO ///////////
-
-    dur_pos_embed_->MarkBegin(stream_);
-    pos_embed_->Enqueue(stream_);
-    dur_pos_embed_->MarkEnd(stream_);
-
-    cudaMemcpyAsync(
-      pts_head_->bindings["pos_embed"]->ptr,
-      pos_embed_->bindings["pos_embed"]->ptr, 
-      pos_embed_->bindings["pos_embed"]->nbytes(), 
-      cudaMemcpyDeviceToDevice, stream_);
-    cudaMemcpyAsync(
-      pts_head_->bindings["cone"]->ptr,
-      pos_embed_->bindings["cone"]->ptr, 
-      pos_embed_->bindings["cone"]->nbytes(), 
-      cudaMemcpyDeviceToDevice, stream_);
+  if (!data_store_->check_if_all_camera_image_received()) {
+    RCLCPP_WARN(get_logger(), "skipping since not all camera is received yet");
+    return;
+  }
+  if (!data_store_->check_if_all_camera_info_received()) {
+    RCLCPP_WARN(get_logger(), "skipping since not all camera info is received yet");
+    return;
   }
 
-  // load necessary data
-  /////////// REPLACE THIS PART WITH ROS TOPIC INFO ///////////
-  backbone_->bindings["img"]->load(frame_dir + "img.bin");
-  pts_head_->bindings["data_ego_pose"]->load(frame_dir + "data_ego_pose.bin");
-  pts_head_->bindings["data_ego_pose_inv"]->load(frame_dir + "data_ego_pose_inv.bin");
+  if (data_store_->check_if_all_images_synced()) {
+    RCLCPP_INFO(get_logger(), "All images are synchronized and all camera info received.");
+    if (!is_inference_initialized_) {
+      inference_position_embedding(
+        data_store_->get_image_shape(),
+        data_store_->get_camera_info_vector(),
+        get_camera_extrinsics_vector(data_store_->get_camera_link_names())
+      );
+      is_inference_initialized_ = true;
+    }
 
-  char stamp_buf[8];
-  std::ifstream file_(frame_dir + "data_timestamp.bin", std::ios::binary);
-  file_.read(stamp_buf, sizeof(double));
-  double stamp_current = reinterpret_cast<double*>(stamp_buf)[0];
-  /////////// REPLACE THIS PART WITH ROS TOPIC INFO ///////////
+    const auto [ego_pose, ego_pose_inv] = get_ego_pose_vector();
+    inference_detector(
+      data_store_->get_camera_images_vector(),
+      ego_pose, ego_pose_inv,
+      data_store_->get_timestamp()
+    );
+    data_store_->reset_camera_images();
+  }
+}
+
+std::vector<float> StreamPetrNode::get_camera_extrinsics_vector(
+  const std::vector<std::string> & camera_links)
+{
+  std::vector<float> res;
+  for (const std::string & camera_link : camera_links) {
+    try {
+      geometry_msgs::msg::TransformStamped transform = tf_buffer_.lookupTransform("base_link", camera_link, tf2::TimePointZero);
+      
+      tf2::Quaternion quat(
+        transform.transform.rotation.x,
+        transform.transform.rotation.y,
+        transform.transform.rotation.z,
+        transform.transform.rotation.w
+      );
+      tf2::Matrix3x3 rotation_matrix(quat);
+
+      std::vector<float> extrinsics = {
+        static_cast<float>(rotation_matrix[0][0]), static_cast<float>(rotation_matrix[0][1]), static_cast<float>(rotation_matrix[0][2]), static_cast<float>(transform.transform.translation.x),
+        static_cast<float>(rotation_matrix[1][0]), static_cast<float>(rotation_matrix[1][1]), static_cast<float>(rotation_matrix[1][2]), static_cast<float>(transform.transform.translation.y),
+        static_cast<float>(rotation_matrix[2][0]), static_cast<float>(rotation_matrix[2][1]), static_cast<float>(rotation_matrix[2][2]), static_cast<float>(transform.transform.translation.z),
+        0.0f, 0.0f, 0.0f, 1.0f
+      };
+
+      res.insert(res.end(), extrinsics.begin(), extrinsics.end());
+    } catch (const tf2::TransformException & ex) {
+      throw std::runtime_error("Could not transform from " + camera_link + " to base_link: " + std::string(ex.what()));
+    }
+  }
+
+  return res;
+}
+
+std::pair<std::vector<float>, std::vector<float>> StreamPetrNode::get_ego_pose_vector() const
+{
+  if (!latest_kinematic_state_ || !initial_kinematic_state_) {
+    throw std::runtime_error("Kinematic states have not been received.");
+  }
+
+  const auto& latest_pose = latest_kinematic_state_->pose.pose;
+  const auto& initial_pose = initial_kinematic_state_->pose.pose;
+
+  tf2::Quaternion latest_quat(latest_pose.orientation.x, latest_pose.orientation.y, latest_pose.orientation.z, latest_pose.orientation.w);
+  tf2::Quaternion initial_quat(initial_pose.orientation.x, initial_pose.orientation.y, initial_pose.orientation.z, initial_pose.orientation.w);
+
+  tf2::Matrix3x3 latest_rot(latest_quat);
+  tf2::Matrix3x3 initial_rot(initial_quat);
+
+  tf2::Matrix3x3 relative_rot = initial_rot.inverse() * latest_rot;
+
+  tf2::Vector3 latest_translation(latest_pose.position.x, latest_pose.position.y, latest_pose.position.z);
+  tf2::Vector3 initial_translation(initial_pose.position.x, initial_pose.position.y, initial_pose.position.z);
+  tf2::Vector3 relative_translation = latest_translation - initial_translation;
+
+  relative_translation = initial_rot.inverse() * relative_translation;
+
+  std::vector<float> egopose = {
+    static_cast<float>(relative_rot[0][0]), static_cast<float>(relative_rot[0][1]), static_cast<float>(relative_rot[0][2]), static_cast<float>(relative_translation.x()),
+    static_cast<float>(relative_rot[1][0]), static_cast<float>(relative_rot[1][1]), static_cast<float>(relative_rot[1][2]), static_cast<float>(relative_translation.y()),
+    static_cast<float>(relative_rot[2][0]), static_cast<float>(relative_rot[2][1]), static_cast<float>(relative_rot[2][2]), static_cast<float>(relative_translation.z()),
+    0.0f, 0.0f, 0.0f, 1.0f
+  };
+
+  tf2::Matrix3x3 inverse_rot = relative_rot.transpose();
+  tf2::Vector3 inverse_translation = -(inverse_rot * relative_translation);
+
+  std::vector<float> inverse_egopose = {
+    static_cast<float>(inverse_rot[0][0]), static_cast<float>(inverse_rot[0][1]), static_cast<float>(inverse_rot[0][2]), static_cast<float>(inverse_translation.x()),
+    static_cast<float>(inverse_rot[1][0]), static_cast<float>(inverse_rot[1][1]), static_cast<float>(inverse_rot[1][2]), static_cast<float>(inverse_translation.y()),
+    static_cast<float>(inverse_rot[2][0]), static_cast<float>(inverse_rot[2][1]), static_cast<float>(inverse_rot[2][2]), static_cast<float>(inverse_translation.z()),
+    0.0f, 0.0f, 0.0f, 1.0f
+  };
+
+  return std::make_pair(egopose, inverse_egopose);
+}
+
+void StreamPetrNode::inference_position_embedding(
+  const std::vector<int> & img_metas_pad,
+  const std::vector<float> & intrinsics,
+  const std::vector<float> & img2lidar)
+{
+  RCLCPP_INFO(get_logger(), "intrinsics size: %ld", intrinsics.size());
+  RCLCPP_INFO(get_logger(), "img2lidar size: %ld", img2lidar.size());
+
+  pos_embed_->bindings["img_metas_pad"]->load_from_vector<int>(img_metas_pad);
+  pos_embed_->bindings["intrinsics"]->load_from_vector(intrinsics);
+  pos_embed_->bindings["img2lidar"]->load_from_vector(img2lidar);
+
+  dur_pos_embed_->MarkBegin(stream_);
+  pos_embed_->Enqueue(stream_);
+  dur_pos_embed_->MarkEnd(stream_);
+
+  cudaMemcpyAsync(
+    pts_head_->bindings["pos_embed"]->ptr,
+    pos_embed_->bindings["pos_embed"]->ptr, 
+    pos_embed_->bindings["pos_embed"]->nbytes(), 
+    cudaMemcpyDeviceToDevice, stream_);
+  cudaMemcpyAsync(
+    pts_head_->bindings["cone"]->ptr,
+    pos_embed_->bindings["cone"]->ptr, 
+    pos_embed_->bindings["cone"]->nbytes(), 
+    cudaMemcpyDeviceToDevice, stream_);
+}
+
+void StreamPetrNode::inference_detector(
+  const std::vector<float> & imgs,
+  const std::vector<float> & ego_pose,
+  const std::vector<float> & ego_pose_inv,
+  const double stamp)
+{
+  RCLCPP_INFO(get_logger(), "imgs size: %ld", imgs.size());
+  RCLCPP_INFO(get_logger(), "ego_pose size: %ld", ego_pose.size());
+  RCLCPP_INFO(get_logger(), "stamp: %f", stamp);
+  backbone_->bindings["img"]->load_from_vector(imgs);
+  pts_head_->bindings["data_ego_pose"]->load_from_vector(ego_pose);
+  pts_head_->bindings["data_ego_pose_inv"]->load_from_vector(ego_pose_inv);
 
   { // feature extraction execution
     dur_backbone_->MarkBegin(stream_);
@@ -300,20 +428,20 @@ void StreamPetrNode::inference(const int f, const std::string & data_dir) {
 
     cudaMemcpyAsync(
       pts_head_->bindings["x"]->ptr,
-      backbone_->bindings["img_feats"]->ptr, 
-      backbone_->bindings["img_feats"]->nbytes(), 
+      backbone_->bindings["img_feats"]->ptr,
+      backbone_->bindings["img_feats"]->nbytes(),
       cudaMemcpyDeviceToDevice, stream_);
   }
 
   { // backbone execution
     // TODO: Properly initialize the first weights for the first frame
-    mem_.StepPre(stamp_current);
+    mem_.StepPre(stamp);
 
     // inference
     dur_ptshead_->MarkBegin(stream_);
     pts_head_->Enqueue(stream_);
     dur_ptshead_->MarkEnd(stream_);
-    mem_.StepPost(stamp_current);
+    mem_.StepPost(stamp);
 
     // copy mem_post to mem_pre for next round
     pts_head_->bindings["pre_memory_embedding"]->mov(pts_head_->bindings["post_memory_embedding"], stream_);
@@ -324,14 +452,9 @@ void StreamPetrNode::inference(const int f, const std::string & data_dir) {
 
   cudaStreamSynchronize(stream_);
 
-  if (f == 0) {
-    std::cout << "position embedding: " << dur_pos_embed_->Elapsed()
-              << std::endl;
-  }
-  std::cout << "backbone: " << dur_backbone_->Elapsed() 
-            << ", ptshead: " << dur_ptshead_->Elapsed() 
-            << std::endl;
+  std::cout << "KOJI!!! FINISHED INFERENCE!!!! " << std::endl;
 
+  ////////////////////////////// TODO MOVE THIS TO ANOTHER FUNC //////////////////////////////
   // cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy
   const std::vector<float> all_bbox_preds = pts_head_->bindings["all_bbox_preds"]->cpu();
   const std::vector<float> all_cls_scores = pts_head_->bindings["all_cls_scores"]->cpu();
@@ -354,6 +477,7 @@ void StreamPetrNode::inference(const int f, const std::string & data_dir) {
   output_msg.objects = raw_objects;
   output_msg.header.frame_id = "base_link";
   pub_objects_->publish(output_msg);
+  ////////////////////////////// TODO MOVE THIS TO ANOTHER FUNC //////////////////////////////
 }
 
 }  // namespace tensorrt_stream_petr

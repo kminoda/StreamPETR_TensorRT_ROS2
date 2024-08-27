@@ -10,6 +10,8 @@
       precision_head: "fp32"
       precision_position_embedding: "fp32"
       point_cloud_range: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
+      input_image_height: 256
+      input_image_width: 704
     post_process_params:
       confidence_threshold: 0.5
       # circle_nms_dist_threshold: 0.5
