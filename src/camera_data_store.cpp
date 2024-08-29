@@ -157,9 +157,18 @@ std::vector<float> CameraDataStore::get_camera_images_vector() const
     RCLCPP_INFO(logger_, "Camera ID %zu: Image shape: (%d, %d, %d)",
                 camera_id, img.rows, img.cols, img.channels());
 
-    const size_t old_size = vec.size();
-    vec.resize(old_size + img.total() * img.channels());
-    std::memcpy(vec.data() + old_size, img.data, img.total() * img.channels() * sizeof(float));
+    // Convert img to (3, rows, cols) format
+    std::vector<float> image_flattened(3 * img.rows * img.cols);
+    for (int c = 0; c < 3; ++c) {
+      for (int y = 0; y < img.rows; ++y) {
+        for (int x = 0; x < img.cols; ++x) {
+          image_flattened.push_back(img.at<cv::Vec3f>(y, x)[c]);
+        }
+      }
+    }
+
+    // Append the flattened image to the vector
+    vec.insert(vec.end(), image_flattened.begin(), image_flattened.end());
   }
 
   return vec;

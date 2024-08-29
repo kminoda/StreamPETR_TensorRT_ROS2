@@ -417,8 +417,6 @@ void StreamPetrNode::inference_detector(
   RCLCPP_INFO(get_logger(), "ego_pose size: %ld", ego_pose.size());
   RCLCPP_INFO(get_logger(), "stamp: %f", stamp);
   backbone_->bindings["img"]->load_from_vector(imgs);
-  pts_head_->bindings["data_ego_pose"]->load_from_vector(ego_pose);
-  pts_head_->bindings["data_ego_pose_inv"]->load_from_vector(ego_pose_inv);
 
   { // feature extraction execution
     dur_backbone_->MarkBegin(stream_);
@@ -432,6 +430,9 @@ void StreamPetrNode::inference_detector(
       backbone_->bindings["img_feats"]->nbytes(),
       cudaMemcpyDeviceToDevice, stream_);
   }
+
+  pts_head_->bindings["data_ego_pose"]->load_from_vector(ego_pose);
+  pts_head_->bindings["data_ego_pose_inv"]->load_from_vector(ego_pose_inv);
 
   { // backbone execution
     // TODO: Properly initialize the first weights for the first frame
