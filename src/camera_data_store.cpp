@@ -107,11 +107,14 @@ std::vector<float> CameraDataStore::get_camera_info_vector() const
       throw std::runtime_error("CameraInfo message not received for camera ID: " + std::to_string(camera_id));
     }
 
+    float scale_x = static_cast<float>(image_width_) / camera_info_msg->width;
+    float scale_y = static_cast<float>(image_height_) / camera_info_msg->height;
+
     std::vector<float> K = {
-      static_cast<float>(camera_info_msg->k[0]), static_cast<float>(camera_info_msg->k[1]), static_cast<float>(camera_info_msg->k[2]), 0.0f,
-      static_cast<float>(camera_info_msg->k[3]), static_cast<float>(camera_info_msg->k[4]), static_cast<float>(camera_info_msg->k[5]), 0.0f,
-      static_cast<float>(camera_info_msg->k[6]), static_cast<float>(camera_info_msg->k[7]), static_cast<float>(camera_info_msg->k[8]), 0.0f,
-      0.0f,                                       0.0f,                                       0.0f,                                       1.0f
+      static_cast<float>(camera_info_msg->k[0]) * scale_x, static_cast<float>(camera_info_msg->k[1]) * scale_x, static_cast<float>(camera_info_msg->k[2]) * scale_x, 0.0f,
+      static_cast<float>(camera_info_msg->k[3]) * scale_y, static_cast<float>(camera_info_msg->k[4]) * scale_y, static_cast<float>(camera_info_msg->k[5]) * scale_y, 0.0f,
+      static_cast<float>(camera_info_msg->k[6]),           static_cast<float>(camera_info_msg->k[7]),           static_cast<float>(camera_info_msg->k[8]),           0.0f,
+      0.0f,                                                0.0f,                                                 0.0f,                                                 1.0f
     };
 
     intrinsics.insert(intrinsics.end(), K.begin(), K.end());
