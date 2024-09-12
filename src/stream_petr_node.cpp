@@ -323,12 +323,11 @@ std::vector<float> StreamPetrNode::get_camera_extrinsics_vector(
   for (const std::string & camera_link : camera_links) {
     try {
       geometry_msgs::msg::TransformStamped transform = tf_buffer_.lookupTransform("base_link", camera_link, tf2::TimePointZero);
-      std::cout << camera_link << ": " << transform.transform.rotation.x << ", " << transform.transform.rotation.y << ", " << transform.transform.rotation.z << ", " << transform.transform.rotation.w << std::endl;
       tf2::Quaternion quat(
+        transform.transform.rotation.w,
         transform.transform.rotation.x,
         transform.transform.rotation.y,
-        transform.transform.rotation.z,
-        transform.transform.rotation.w
+        transform.transform.rotation.z
       );
       tf2::Matrix3x3 rotation_matrix;
       rotation_matrix.setRotation(quat);
@@ -356,24 +355,10 @@ std::pair<std::vector<float>, std::vector<float>> StreamPetrNode::get_ego_pose_v
   }
 
   const auto& latest_pose = latest_kinematic_state_->pose.pose;
-  // const auto& initial_pose = initial_kinematic_state_->pose.pose;
 
-  // tf2::Quaternion latest_quat(latest_pose.orientation.x, latest_pose.orientation.y, latest_pose.orientation.z, latest_pose.orientation.w);
-  // tf2::Quaternion initial_quat(initial_pose.orientation.x, initial_pose.orientation.y, initial_pose.orientation.z, initial_pose.orientation.w);
-
-  // tf2::Matrix3x3 latest_rot(latest_quat);
-  // tf2::Matrix3x3 initial_rot(initial_quat);
-
-  // tf2::Matrix3x3 relative_rot = initial_rot.inverse() * latest_rot;
-
-  // tf2::Vector3 latest_translation(latest_pose.position.x, latest_pose.position.y, latest_pose.position.z);
-  // tf2::Vector3 initial_translation(initial_pose.position.x, initial_pose.position.y, initial_pose.position.z);
-  // tf2::Vector3 relative_translation = latest_translation - initial_translation;
-
-  // relative_translation = initial_rot.inverse() * relative_translation;
-
-  tf2::Quaternion latest_quat(latest_pose.orientation.x, latest_pose.orientation.y, latest_pose.orientation.z, latest_pose.orientation.w);
-  tf2::Matrix3x3 latest_rot(latest_quat);
+  tf2::Quaternion latest_quat(latest_pose.orientation.w, latest_pose.orientation.x, latest_pose.orientation.y, latest_pose.orientation.z);
+  tf2::Matrix3x3 latest_rot;
+  latest_rot.setRotation(latest_quat);
   tf2::Matrix3x3 relative_rot = latest_rot;
   tf2::Vector3 latest_translation(latest_pose.position.x, latest_pose.position.y, latest_pose.position.z);
   tf2::Vector3 relative_translation = latest_translation;
