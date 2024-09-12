@@ -144,6 +144,15 @@ struct Tensor {
     // // Copy to CUDA device memory
     // cudaMemcpy(ptr, b2.data(), dsize, cudaMemcpyHostToDevice);
     cudaMemcpy(ptr, data.data(), dsize, cudaMemcpyHostToDevice);
+
+    std::cout << "Contents of hbuffer as float for " << volume << ":" << std::endl;
+    int hoge = volume;
+    if (hoge > 96) hoge = 96;
+    for(int i = 0; i < hoge; i++) {
+      std::cout << static_cast<float>(data[i]) << " ";
+      if((i + 1) % 4 == 0) std::cout << std::endl; // New line every 10 elements
+    }
+    std::cout << std::endl;
   }
 
   std::vector<float> cpu() {
@@ -285,6 +294,7 @@ public:
   explicit StreamPetrNode(const rclcpp::NodeOptions & node_options);
 
 private:
+  std::map<int, int> initialize_camera_order_remapping();
   void inference(const int f, const std::string & data_dir);
   void odometry_callback(Odometry::ConstSharedPtr input_msg);
   void camera_info_callback(
@@ -314,6 +324,7 @@ private:
   tf2_ros::TransformListener tf_listener_;
   const size_t rois_number_;
   const double confidence_threshold_;
+  const std::map<int, int> camera_order_remapping_;
   std::vector<float> point_cloud_range_;
   Odometry::ConstSharedPtr initial_kinematic_state_ = nullptr;
   Odometry::ConstSharedPtr latest_kinematic_state_ = nullptr;

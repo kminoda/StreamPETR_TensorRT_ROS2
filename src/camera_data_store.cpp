@@ -132,6 +132,11 @@ std::vector<int> CameraDataStore::get_image_shape() const
 std::vector<float> CameraDataStore::get_camera_images_vector() const
 {
   std::vector<float> vec;
+  // Normalization parameters
+  const cv::Scalar mean(123.675, 116.28, 103.53);
+  const cv::Scalar std(58.395, 57.12, 57.375);
+  const bool to_rgb = true;
+
   for (size_t camera_id = 0; camera_id < camera_image_list_.size(); ++camera_id)
   {
     const auto & image_msg = camera_image_list_[camera_id];
@@ -140,38 +145,43 @@ std::vector<float> CameraDataStore::get_camera_images_vector() const
     }
     cv::Mat img;
     try {
-      img = cv_bridge::toCvCopy(image_msg, sensor_msgs::image_encodings::TYPE_32FC3)->image;
+      img = cv_bridge::toCvCopy(image_msg, sensor_msgs::image_encodings::BGR8)->image;
     } catch (const cv_bridge::Exception& e) {
       RCLCPP_WARN(logger_, "Image conversion failed: %s", e.what());
- 
-      if (image_msg->encoding == sensor_msgs::image_encodings::BGR8) {
-        img = cv_bridge::toCvCopy(image_msg, sensor_msgs::image_encodings::BGR8)->image;
-        img.convertTo(img, CV_32FC3); // Convert to float with 3 channels
-      } else {
-        throw std::runtime_error("Unsupported image encoding for 3-channel conversion: " + image_msg->encoding);
-      }
+      throw std::runtime_error("Unsupported image encoding for conversion: " + image_msg->encoding);
     }
 
     if (img.empty()) {
       throw std::runtime_error("Failed to convert image.");
     }
 
+    // Resize the image
     cv::resize(img, img, cv::Size(image_width_, image_height_));
+
+    // Convert to RGB if needed
+    if (to_rgb) {
+      cv::cvtColor(img, img, cv::COLOR_BGR2RGB);
+    }
+
+    // Convert to float
+    img.convertTo(img, CV_32FC3);
+
+    // Normalize the image
+    cv::subtract(img, mean, img);
+    cv::divide(img, std, img);
+
     RCLCPP_INFO(logger_, "Camera ID %zu: Image shape: (%d, %d, %d)",
                 camera_id, img.rows, img.cols, img.channels());
 
     // Convert img to (3, rows, cols) format
-    std::vector<float> image_flattened(3 * img.rows * img.cols);
+    vec.reserve(vec.size() + 3 * img.rows * img.cols);
     for (int c = 0; c < 3; ++c) {
       for (int y = 0; y < img.rows; ++y) {
         for (int x = 0; x < img.cols; ++x) {
-          image_flattened.push_back(img.at<cv::Vec3f>(y, x)[c]);
+          vec.push_back(img.at<cv::Vec3f>(y, x)[c]);
         }
       }
     }
-
-    // Append the flattened image to the vector
-    vec.insert(vec.end(), image_flattened.begin(), image_flattened.end());
   }
 
   return vec;

@@ -1,5 +1,13 @@
 /**:
   ros__parameters:
+    # see https://github.com/open-mmlab/mmdetection3d/blob/fe25f7a51d36e3702f961e198894580d83c4387b/mmdet3d/evaluation/metrics/nuscenes_metric.py#L386-L393
+    camera_order_remapping:
+      0: 0 # CAMERA_FRONT
+      1: 3 # CAMERA_BACK
+      2: 2 # CAMERA_FRONT_LEFT
+      3: 4 # CAMERA_BACK_LEFT
+      4: 5 # CAMERA_BACK_RIGHT
+      5: 1 # CAMERA_FRONT_RIGHT
     temporary_params:
       bins_directory_path: /home/minoda/ghq/github.com/exiawsh/StreamPETR/work_dirs/intermediate/
     model_params:

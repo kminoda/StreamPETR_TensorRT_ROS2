@@ -160,7 +160,8 @@ StreamPetrNode::StreamPetrNode(const rclcpp::NodeOptions & node_options)
   tf_buffer_(this->get_clock()),
   tf_listener_(tf_buffer_),
   rois_number_(static_cast<size_t>(declare_parameter<int>("rois_number", 6))),
-  confidence_threshold_(declare_parameter<double>("post_process_params.confidence_threshold"))
+  confidence_threshold_(declare_parameter<double>("post_process_params.confidence_threshold")),
+  camera_order_remapping_(initialize_camera_order_remapping())
 {
   RCLCPP_INFO(get_logger(), "nvinfer: %d.%d.%d\n", NV_TENSORRT_MAJOR, NV_TENSORRT_MINOR, NV_TENSORRT_PATCH);
   cudaSetDevice(0);
@@ -248,6 +249,17 @@ StreamPetrNode::StreamPetrNode(const rclcpp::NodeOptions & node_options)
   // }
 }
 
+std::map<int, int> StreamPetrNode::initialize_camera_order_remapping()
+{
+  std::map<int, int> remapping;
+  for (int i = 0; i < static_cast<int>(rois_number_); ++i) {
+    std::string param_name = "camera_order_remapping." + std::to_string(i);
+    int remapped_value = declare_parameter<int>(param_name);
+    remapping[i] = remapped_value;
+  }
+  return remapping;
+}
+
 void StreamPetrNode::odometry_callback(
   Odometry::ConstSharedPtr input_msg)
 {
@@ -263,7 +275,7 @@ void StreamPetrNode::camera_info_callback(
   const std::size_t camera_id)
 {
   std::cout << "KOJI!!!! camera info callback @" << camera_id << std::endl;
-  data_store_->update_camera_info(camera_id, input_camera_info_msg);
+  data_store_->update_camera_info(camera_order_remapping_.at(camera_id), input_camera_info_msg);
 }
 
 void StreamPetrNode::camera_image_callback(
@@ -271,7 +283,7 @@ void StreamPetrNode::camera_image_callback(
   const std::size_t camera_id)
 {
   std::cout << "KOJI!!!! camera image callback @" << camera_id << std::endl;
-  data_store_->update_camera_image(camera_id, input_camera_image_msg);
+  data_store_->update_camera_image(camera_order_remapping_.at(camera_id), input_camera_image_msg);
   RCLCPP_INFO(get_logger(), "received camera %d", static_cast<int>(camera_id));
 
   if (!data_store_->check_if_all_camera_image_received()) {
@@ -311,7 +323,7 @@ std::vector<float> StreamPetrNode::get_camera_extrinsics_vector(
   for (const std::string & camera_link : camera_links) {
     try {
       geometry_msgs::msg::TransformStamped transform = tf_buffer_.lookupTransform("base_link", camera_link, tf2::TimePointZero);
-      
+      std::cout << camera_link << ": " << transform.transform.rotation.x << ", " << transform.transform.rotation.y << ", " << transform.transform.rotation.z << ", " << transform.transform.rotation.w << std::endl;
       tf2::Quaternion quat(
         transform.transform.rotation.x,
         transform.transform.rotation.y,
@@ -343,21 +355,27 @@ std::pair<std::vector<float>, std::vector<float>> StreamPetrNode::get_ego_pose_v
   }
 
   const auto& latest_pose = latest_kinematic_state_->pose.pose;
-  const auto& initial_pose = initial_kinematic_state_->pose.pose;
+  // const auto& initial_pose = initial_kinematic_state_->pose.pose;
+
+  // tf2::Quaternion latest_quat(latest_pose.orientation.x, latest_pose.orientation.y, latest_pose.orientation.z, latest_pose.orientation.w);
+  // tf2::Quaternion initial_quat(initial_pose.orientation.x, initial_pose.orientation.y, initial_pose.orientation.z, initial_pose.orientation.w);
+
+  // tf2::Matrix3x3 latest_rot(latest_quat);
+  // tf2::Matrix3x3 initial_rot(initial_quat);
+
+  // tf2::Matrix3x3 relative_rot = initial_rot.inverse() * latest_rot;
+
+  // tf2::Vector3 latest_translation(latest_pose.position.x, latest_pose.position.y, latest_pose.position.z);
+  // tf2::Vector3 initial_translation(initial_pose.position.x, initial_pose.position.y, initial_pose.position.z);
+  // tf2::Vector3 relative_translation = latest_translation - initial_translation;
+
+  // relative_translation = initial_rot.inverse() * relative_translation;
 
   tf2::Quaternion latest_quat(latest_pose.orientation.x, latest_pose.orientation.y, latest_pose.orientation.z, latest_pose.orientation.w);
-  tf2::Quaternion initial_quat(initial_pose.orientation.x, initial_pose.orientation.y, initial_pose.orientation.z, initial_pose.orientation.w);
-
   tf2::Matrix3x3 latest_rot(latest_quat);
-  tf2::Matrix3x3 initial_rot(initial_quat);
-
-  tf2::Matrix3x3 relative_rot = initial_rot.inverse() * latest_rot;
-
+  tf2::Matrix3x3 relative_rot = latest_rot;
   tf2::Vector3 latest_translation(latest_pose.position.x, latest_pose.position.y, latest_pose.position.z);
-  tf2::Vector3 initial_translation(initial_pose.position.x, initial_pose.position.y, initial_pose.position.z);
-  tf2::Vector3 relative_translation = latest_translation - initial_translation;
-
-  relative_translation = initial_rot.inverse() * relative_translation;
+  tf2::Vector3 relative_translation = latest_translation;
 
   std::vector<float> egopose = {
     static_cast<float>(relative_rot[0][0]), static_cast<float>(relative_rot[0][1]), static_cast<float>(relative_rot[0][2]), static_cast<float>(relative_translation.x()),
