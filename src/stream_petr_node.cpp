@@ -330,7 +330,8 @@ std::vector<float> StreamPetrNode::get_camera_extrinsics_vector(
         transform.transform.rotation.z,
         transform.transform.rotation.w
       );
-      tf2::Matrix3x3 rotation_matrix(quat);
+      tf2::Matrix3x3 rotation_matrix;
+      rotation_matrix.setRotation(quat);
 
       std::vector<float> extrinsics = {
         static_cast<float>(rotation_matrix[0][0]), static_cast<float>(rotation_matrix[0][1]), static_cast<float>(rotation_matrix[0][2]), static_cast<float>(transform.transform.translation.x),
