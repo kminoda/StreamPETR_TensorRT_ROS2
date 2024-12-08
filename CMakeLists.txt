@@ -19,8 +19,11 @@ find_package(OpenCV REQUIRED)
 include(CheckLanguage)
 check_language(CUDA)
 find_package(CUDA REQUIRED)
+cmake_policy(SET CMP0104 NEW)
 
-set(CUDA_ARCHITECTURES 89)
+set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_ARCHITECTURES 89)
 
 
 if(CMAKE_CUDA_COMPILER)
