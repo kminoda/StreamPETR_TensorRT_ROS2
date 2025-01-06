@@ -14,6 +14,8 @@
 
 #include "stream_petr_node.hpp"
 
+#include <Eigen/Dense>
+
 #include <cmath>
 #include <memory>
 #include <string>
@@ -274,7 +276,6 @@ void StreamPetrNode::camera_info_callback(
   CameraInfo::ConstSharedPtr input_camera_info_msg,
   const std::size_t camera_id)
 {
-  std::cout << "KOJI!!!! camera info callback @" << camera_id << std::endl;
   data_store_->update_camera_info(camera_order_remapping_.at(camera_id), input_camera_info_msg);
 }
 
@@ -282,7 +283,6 @@ void StreamPetrNode::camera_image_callback(
   Image::ConstSharedPtr input_camera_image_msg,
   const std::size_t camera_id)
 {
-  std::cout << "KOJI!!!! camera image callback @" << camera_id << std::endl;
   data_store_->update_camera_image(camera_order_remapping_.at(camera_id), input_camera_image_msg);
   RCLCPP_INFO(get_logger(), "received camera %d", static_cast<int>(camera_id));
 
@@ -319,29 +319,68 @@ void StreamPetrNode::camera_image_callback(
 std::vector<float> StreamPetrNode::get_camera_extrinsics_vector(
   const std::vector<std::string> & camera_links)
 {
+  std::vector<float> intrinsics_all = data_store_->get_camera_info_vector();
+
   std::vector<float> res;
-  for (const std::string & camera_link : camera_links) {
+  res.reserve(camera_links.size() * 16);
+
+  for (size_t i = 0; i < camera_links.size(); ++i) {
+    Eigen::Matrix4f K_4x4 = Eigen::Matrix4f::Identity();
+    {
+      size_t offset = i * 16;
+      for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+          K_4x4(row, col) = intrinsics_all[offset + row*4 + col];
+        }
+      }
+    }
+    geometry_msgs::msg::TransformStamped transform_stamped;
     try {
-      geometry_msgs::msg::TransformStamped transform = tf_buffer_.lookupTransform("base_link", camera_link, tf2::TimePointZero);
-      tf2::Quaternion quat(
-        transform.transform.rotation.w,
-        transform.transform.rotation.x,
-        transform.transform.rotation.y,
-        transform.transform.rotation.z
+      transform_stamped =
+        tf_buffer_.lookupTransform(camera_links[i], "LIDAR_TOP", tf2::TimePointZero);
+    } catch (const tf2::TransformException &ex) {
+      throw std::runtime_error(
+        "Could not transform from LIDAR_TOP to " + camera_links[i] + 
+        ": " + std::string(ex.what()));
+    }
+
+    Eigen::Matrix4f T_lidar2cam = Eigen::Matrix4f::Identity();
+    {
+      tf2::Quaternion tf2_q(
+        transform_stamped.transform.rotation.x,
+        transform_stamped.transform.rotation.y,
+        transform_stamped.transform.rotation.z,
+        transform_stamped.transform.rotation.w
       );
-      tf2::Matrix3x3 rotation_matrix;
-      rotation_matrix.setRotation(quat);
+      tf2::Matrix3x3 tf2_R(tf2_q);
 
-      std::vector<float> extrinsics = {
-        static_cast<float>(rotation_matrix[0][0]), static_cast<float>(rotation_matrix[0][1]), static_cast<float>(rotation_matrix[0][2]), static_cast<float>(transform.transform.translation.x),
-        static_cast<float>(rotation_matrix[1][0]), static_cast<float>(rotation_matrix[1][1]), static_cast<float>(rotation_matrix[1][2]), static_cast<float>(transform.transform.translation.y),
-        static_cast<float>(rotation_matrix[2][0]), static_cast<float>(rotation_matrix[2][1]), static_cast<float>(rotation_matrix[2][2]), static_cast<float>(transform.transform.translation.z),
-        0.0f, 0.0f, 0.0f, 1.0f
-      };
+      Eigen::Matrix3f R;
+      for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+          R(r, c) = static_cast<float>(tf2_R[r][c]);
+        }
+      }
 
-      res.insert(res.end(), extrinsics.begin(), extrinsics.end());
-    } catch (const tf2::TransformException & ex) {
-      throw std::runtime_error("Could not transform from " + camera_link + " to base_link: " + std::string(ex.what()));
+      Eigen::Vector3f t;
+      t << static_cast<float>(transform_stamped.transform.translation.x),
+           static_cast<float>(transform_stamped.transform.translation.y),
+           static_cast<float>(transform_stamped.transform.translation.z);
+
+      for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+          T_lidar2cam(r, c) = R(r, c);
+        }
+        T_lidar2cam(r, 3) = t(r);
+      }
+    }
+
+    Eigen::Matrix4f T_lidar2img = K_4x4 * T_lidar2cam;
+    Eigen::Matrix4f T_img2lidar = T_lidar2img.inverse();
+
+    for (int row = 0; row < 4; ++row) {
+      for (int col = 0; col < 4; ++col) {
+        res.push_back(T_img2lidar(row, col));
+      }
     }
   }
 
@@ -388,9 +427,6 @@ void StreamPetrNode::inference_position_embedding(
   const std::vector<float> & intrinsics,
   const std::vector<float> & img2lidar)
 {
-  RCLCPP_INFO(get_logger(), "intrinsics size: %ld", intrinsics.size());
-  RCLCPP_INFO(get_logger(), "img2lidar size: %ld", img2lidar.size());
-
   pos_embed_->bindings["img_metas_pad"]->load_from_vector<int>(img_metas_pad);
   pos_embed_->bindings["intrinsics"]->load_from_vector(intrinsics);
   pos_embed_->bindings["img2lidar"]->load_from_vector(img2lidar);
@@ -417,9 +453,6 @@ void StreamPetrNode::inference_detector(
   const std::vector<float> & ego_pose_inv,
   const double stamp)
 {
-  RCLCPP_INFO(get_logger(), "imgs size: %ld", imgs.size());
-  RCLCPP_INFO(get_logger(), "ego_pose size: %ld", ego_pose.size());
-  RCLCPP_INFO(get_logger(), "stamp: %f", stamp);
   backbone_->bindings["img"]->load_from_vector(imgs);
 
   { // feature extraction execution
@@ -456,8 +489,6 @@ void StreamPetrNode::inference_detector(
   }
 
   cudaStreamSynchronize(stream_);
-
-  std::cout << "KOJI!!! FINISHED INFERENCE!!!! " << std::endl;
 
   ////////////////////////////// TODO MOVE THIS TO ANOTHER FUNC //////////////////////////////
   // cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy
