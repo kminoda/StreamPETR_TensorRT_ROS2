@@ -8,8 +8,6 @@
       3: 4 # CAMERA_BACK_LEFT
       4: 5 # CAMERA_BACK_RIGHT
       5: 1 # CAMERA_FRONT_RIGHT
-    temporary_params:
-      bins_directory_path: /home/minoda/ghq/github.com/exiawsh/StreamPETR/work_dirs/intermediate/
     model_params:
       engine_backbone_path: "$(var model_path)/simplify_extract_img_feat.engine"
       engine_head_path: "$(var model_path)/simplify_pts_head_memory.engine"

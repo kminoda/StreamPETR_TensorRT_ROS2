@@ -147,7 +147,6 @@ bool CameraDataStore::check_if_all_images_synced() const
   }
 
   // Check if the difference is within 0.05 seconds (50 milliseconds)
-  const double time_diff = (max_time - min_time).seconds();
   return (max_time - min_time).seconds() <= 0.05;
 }
 

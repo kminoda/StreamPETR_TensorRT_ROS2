@@ -45,7 +45,7 @@ public:
   void reset_camera_images();
 
 private:
-  const int rois_number_;
+  const size_t rois_number_;
   const int image_height_;
   const int image_width_;
   rclcpp::Logger logger_;
