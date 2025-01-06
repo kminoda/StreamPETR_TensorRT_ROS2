@@ -90,3 +90,13 @@ For BEV visualization:
 ```bash
 python3 scripts/debug_visualize_bev.py
 ```
+
+## Performance evaluation
+
+Measured on NVIDIA GeForce RTX 4090.
+
+| Model                           | Throughput (qps) | Latency (mean, ms) | Latency (p95, ms) | GPU Compute Time (mean, ms) |
+|---------------------------------|------------------|--------------------|-------------------|-----------------------------|
+| **simplify_extract_img_feat**   | 655.42           | 2.23946            | 2.495             | 1.52321                     |
+| **simplify_pts_head_memory**    | 458.876          | 2.76451            | 2.7854            | 2.17572                     |
+| **simplify_position_embedding** | 4805.41          | 0.368139           | 0.37793           | 0.186432                    |
