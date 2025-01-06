@@ -23,10 +23,39 @@ For StreamPETR repository, please use this one: [./conversion/pth2onnx.py](./con
 
 You may also use a [Dockerfile](https://github.com/kminoda/StreamPETR/blob/main/Dockerfile) created for this project.
 
-### Step 2: Prepare this repository
+Please store all the onnx files under `./data` directory.
 
 ```bash
-cd StreamPETR_TensorRT_ROS2
+data
+├── simplify_extract_img_feat.onnx
+├── simplify_position_embedding.onnx
+└── simplify_pts_head_memory.onnx
+```
+
+### Step 2: TensorRT compilation
+
+Compile with the following command (which originally comes from [the DL4AGX repository](https://github.com/NVIDIA/DL4AGX/tree/147cb1986549a1c0cc27769f24821ae6523ff5ef/AV-Solutions/streampetr-trt/inference_app#build-tensorrt-engine))
+
+```bash
+trtexec --onnx=./data/simplify_extract_img_feat.onnx --skipInference --saveEngine=./data/simplify_extract_img_feat.engine --fp16
+trtexec --onnx=./data/simplify_pts_head_memory.onnx --skipInference --saveEngine=./data/simplify_pts_head_memory.engine
+trtexec --onnx=./data/simplify_position_embedding.onnx --skipInference --saveEngine=./data/simplify_position_embedding.engine
+```
+
+Now the `./data` directory should look like this.
+```bash
+data
+├── simplify_extract_img_feat.engine
+├── simplify_extract_img_feat.onnx
+├── simplify_position_embedding.engine
+├── simplify_position_embedding.onnx
+├── simplify_pts_head_memory.engine
+└── simplify_pts_head_memory.onnx
+```
+
+### Step 3: Build this repository
+
+```bash
 rosdep install --from-paths . -iry --rosdistro $ROS_DISTRO
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 ```
@@ -45,6 +74,8 @@ You can use this script when launching the TensorRT StreamPETR node.
 python3 scripts/nuscenes_to_ros.py --nuscenes_data_root <PATH_TO_YOUR_NUSCENES_DATASET>
 ```
 
+
+
 ### Visualization scripts
 We have also provided some scripts for visualization for debugging purpose. Execute this alongside with the TensorRT StreamPETR node.
 
@@ -52,6 +83,8 @@ For 3D visualization on front camera:
 ```bash
 python3 scripts/debug_visualize_3d.py
 ```
+
+![](./figures/image.png)
 
 For BEV visualization:
 ```bash
